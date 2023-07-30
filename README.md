@@ -1,33 +1,33 @@
 # mpv-dark-box
 
-这是一个自制的mpv osc脚本，使用了mpv原生![osc.lua](https://github.com/mpv-player/mpv/blob/master/player/lua/osc.lua)框架，主要视觉风格来自于![MPV-EASY-Player项目](https://github.com/422658476/MPV-EASY-Player/blob/master/mpv-easy-data/osc-style/osc-potplayer-box-knob-or-bar-0.lua)
+This is an mpv-osc script using mpv's native [osc.lua](https://github.com/mpv-player/mpv/blob/master/player/lua/osc.lua) based [MPV-EASY-Player project](https://github.com/422658476/MPV-EASY-Player/blob/master/mpv-easy-data/osc-style/osc-potplayer-box-knob-or-bar-0.lua)
 
-## 预览
+## Preview
 
-预览1
+Preview 1
 
-![预览1](https://github.com/maoiscat/mpv-dark-box/blob/main/preview1.png)
+![Preview 1](assets/preview1.png)
 
-预览2
+Preview 2
 
-![预览2](https://github.com/maoiscat/mpv-dark-box/blob/main/preview2.png)
+![Preview 2](assets/preview2.png)
 
-## 使用方法
+## How to use
 
-1. 下载dark-box.lua，放在scripts目录
-2. 在mpv.conf中配置osc=no
-3. 运行
+1. Download and add dark-box.lua in the scripts directory.
+2. Add `osc=no` in mpv.conf
+3. Use mpv as usual
 
-## 配置说明
+## Configuration Instructions
 
-与内置皮肤一样，在script-opts中编辑osc.conf来进行参数设置，大部分参数与内置皮肤是通用的，另有以下有几个改动：
+Like the built-in skin, edit osc.conf in script-opts to set the parameters, most of which are common to the built-in skin, with a few changes:
 
-1. font     --配置OSC字体
-2. layout   --该脚本只有default一种风格
-3. logotext --启动时LOGO下显示的文字，支持ASS格式代码
-4. 圣诞帽被移除了
+1. font     -- configure font used in OSC
+2. layout   -- The script only has default style
+3. logotext -- text is displayed under the logo at startup and supports ASS subtitle code.
+4. Christmas hat has been removed
 
-## 预览图的配置方案
+## Configuration options for the preview image
 
 ### mpv.conf
 
@@ -46,7 +46,7 @@ geometry=640
 
 ```conf
 font=Consolas
-logotext={\\1c&H00\\bord0\\fs30\\fn微软雅黑 light\\fscx125}MPV{\\fscx100} 播放器
+logotext={\\1c&H00\\bord0\\fs30\\fn微软雅黑 light\\fscx125}MPV{\\fscx100} player
 ```
 
-另外自行把mpv.exe的图标替换成空白图标就实现一致效果。
+Also replace the icon of mpv.exe with a blank icon by yourself to achieve the same effect.
