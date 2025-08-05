@@ -10,9 +10,7 @@ This is a fork of the original [maoiscat/mpv-dark-box](https://github.com/maoisc
 
 It's a custom On-Screen-Controller (OSC) for mpv, based on the native `osc.lua` framework. The visual style is inspired by the [MPV-EASY-Player project](https://github.com/422658476/MPV-EASY-Player/blob/master/mpv-easy-data/osc-style/osc-potplayer-box-knob-or-bar-0.lua).
 
-## Preview
-
-![Preview](https://github.com/maoiscat/mpv-dark-box/blob/main/preview.png)
+![Preview](preview.webp)
 
 ## Installation
 
