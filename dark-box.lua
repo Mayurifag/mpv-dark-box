@@ -23,7 +23,7 @@ local user_opts = {
     valign = 0.8, -- vertical alignment, -1 (top) to 1 (bottom)
     halign = 0, -- horizontal alignment, -1 (left) to 1 (right)
     barmargin = 0, -- vertical margin of top/bottombar
-    boxalpha = 0, -- alpha of the background box,
+    boxalpha = 80, -- alpha of the background box,
     -- 0 (opaque) to 255 (fully transparent)
     hidetimeout = 500, -- duration in ms until the OSC hides if no
     -- mouse movement. enforced non-negative for the
@@ -131,7 +131,11 @@ local state = {
     using_video_margins = false,
     border = true,
     maximized = false,
-    osd = mp.create_osd_overlay("ass-events")
+    osd = mp.create_osd_overlay("ass-events"),
+    active_menu = nil,
+    track_menu = {},
+    menu_hide_prevent_timer = nil,
+    track_menu_bindings_enabled = false
 }
 
 local window_control_box_width = 80
@@ -384,7 +388,7 @@ function get_tracklist(type)
     else
         for n = 1, #tracks_osc[type] do
             local track = tracks_osc[type][n]
-            local lang, title, selected = "unknown", "", "○"
+            local lang, title, selected = "unknown", "", "  "
             if not (track.lang == nil) then
                 lang = track.lang
             end
@@ -392,9 +396,9 @@ function get_tracklist(type)
                 title = track.title
             end
             if (track.id == tonumber(mp.get_property(type))) then
-                selected = "●"
+                selected = "\238\132\129 " -- Use arrow icon
             end
-            msg = msg .. "\n" .. selected .. " " .. n .. ": [" .. lang .. "] " .. title
+            msg = msg .. "\n" .. selected .. n .. ": [" .. lang .. "] " .. title
         end
     end
     return msg
@@ -617,6 +621,119 @@ function prepare_elements()
     end
 end
 
+function render_track_menu()
+    -- Find the anchor element
+    local anchor_name = state.active_menu == 'audio' and 'cy_audio' or 'cy_sub'
+    local anchor_element
+    for _, el in ipairs(elements) do
+        if el.name == anchor_name then
+            anchor_element = el
+            break
+        end
+    end
+
+    -- More robust check to prevent crash
+    if not anchor_element or not anchor_element.hitbox then
+        state.active_menu = nil -- disable menu if anchor is gone
+        return assdraw.ass_new()
+    end
+
+    -- Prepare the list of tracks to display.
+    local menu_items = {}
+    if state.active_menu == 'sub' then
+        table.insert(menu_items, {mpv_id = "no", title = "None"})
+    end
+    for _, track in ipairs(tracks_osc[state.active_menu] or {}) do
+        table.insert(menu_items, track)
+    end
+    if #menu_items == 0 then
+        state.active_menu = nil
+        return assdraw.ass_new()
+    end
+
+    local current_id = mp.get_property(state.active_menu)
+
+    -- Calculate dynamic width based on the longest text entry
+    local longest_text_width = 0
+    local font_size = 18
+    local char_width_approx = font_size * 0.6
+    for i, item in ipairs(menu_items) do
+        local title = item.title or (item.lang and ("[" .. item.lang .. "]") or ("Track " .. tostring(item.osc_id or i)))
+        if item.codec and not item.title then title = title .. " (" .. item.codec .. ")" end
+        item.display_title = title -- Store for later use
+        if #title * char_width_approx > longest_text_width then
+            longest_text_width = #title * char_width_approx
+        end
+    end
+
+    -- --- Style & Geometry ---
+    local item_h = 30
+    local h_padding = 15
+    local v_padding = 5
+    local icon_space = 30
+    local corner_radius = 4
+    local min_menu_w = 250
+
+    local menu_w = math.max(min_menu_w, longest_text_width + h_padding * 2 + icon_space)
+    local menu_h = (#menu_items * item_h) + (2 * v_padding)
+
+    -- Positioning:
+    local anchor_hitbox = anchor_element.hitbox
+    local menu_anchor_x = anchor_hitbox.x1 + (anchor_hitbox.x2 - anchor_hitbox.x1) / 2
+    local menu_anchor_y = anchor_hitbox.y1 - 10
+    local menu_left = menu_anchor_x - menu_w / 2
+    local menu_top = menu_anchor_y - menu_h
+
+    state.track_menu.hitbox = { x1 = menu_left, y1 = menu_top, x2 = menu_left + menu_w, y2 = menu_top + menu_h }
+
+    -- --- Drawing Logic ---
+    local menu_ass = assdraw.ass_new()
+    menu_ass:append("{\\r}")
+
+    -- Draw background
+    local bg_alpha_hex = string.format("%02X", user_opts.boxalpha)
+    local bg_style = "{\\1c&H292120&\\3c&HFFFFFF&\\1a&H" .. bg_alpha_hex .. "\\blur1\\bord0}"
+    menu_ass:new_event()
+    menu_ass:an(7):pos(menu_left, menu_top):append(bg_style)
+    menu_ass:draw_start():round_rect_cw(0, 0, menu_w, menu_h, corner_radius):draw_stop()
+
+    -- Loop through items to draw them.
+    state.track_menu.items = {}
+    local text_y_start = menu_top + v_padding
+
+    for i, item in ipairs(menu_items) do
+        local item_top_y = text_y_start + (i - 1) * item_h
+        local item_center_y = item_top_y + item_h / 2
+        local hitbox = { x1 = menu_left, y1 = item_top_y, x2 = menu_left + menu_w, y2 = item_top_y + item_h }
+
+        if mouse_hit_coords(hitbox.x1, hitbox.y1, hitbox.x2, hitbox.y2) then
+            local hover_style = "{\\1c&H00E1FA&\\1a&HD0&\\bord0}"
+            menu_ass:new_event()
+            menu_ass:an(7):pos(menu_left, item_top_y):append(hover_style)
+            menu_ass:draw_start():rect_cw(0, 0, menu_w, item_h):draw_stop()
+        end
+
+        local is_selected = (item.id and tostring(item.id) == tostring(current_id)) or (item.mpv_id == "no" and current_id == "no")
+        local prefix = is_selected and "{\\c&H00E1FA&}" .. "\238\132\129" .. " " or "  "
+        local text_style = is_selected and "{\\fn" .. user_opts.font .. "\\fs18\\bord0.5\\shad0\\c&H00E1FA&}" or "{\\fn" .. user_opts.font .. "\\fs18\\bord0.5\\shad0\\c&HFFFFFF&}"
+
+        table.insert(state.track_menu.items, {
+            x1 = hitbox.x1, y1 = hitbox.y1, x2 = hitbox.x2, y2 = hitbox.y2,
+            mpv_id = item.id or item.mpv_id,
+            display_title = item.display_title
+        })
+
+        menu_ass:new_event()
+        menu_ass:pos(menu_left + h_padding, item_center_y)
+        menu_ass:an(4)
+        menu_ass:append(text_style)
+        menu_ass:append(prefix .. item.display_title)
+    end
+
+    return menu_ass
+end
+
+
 --
 -- Element Rendering
 --
@@ -630,13 +747,11 @@ function render_elements(master_ass)
         ass_append_alpha(style_ass, element.layout.alpha, 0)
 
         if element.eventresponder and (state.active_element == n) then
-            -- run render event functions
             if not (element.eventresponder.render == nil) then
                 element.eventresponder.render(element)
             end
 
             if mouse_hit(element) then
-                -- mouse down styling
                 if (element.styledown) then
                     style_ass:append(osc_styles.elementDown)
                 end
@@ -649,7 +764,6 @@ function render_elements(master_ass)
         end
 
         local elem_ass = assdraw.ass_new()
-
         elem_ass:merge(style_ass)
 
         if not (element.type == "button") then
@@ -662,7 +776,6 @@ function render_elements(master_ass)
             local s_min = element.slider.min.value
             local s_max = element.slider.max.value
 
-            -- draw pos marker
             local foH, xp
             local pos = element.slider.posF()
             local foV = slider_lo.border + slider_lo.gap
@@ -682,8 +795,8 @@ function render_elements(master_ass)
                 xp = get_slider_ele_pos_for(element, pos)
 
                 if slider_lo.stype ~= "bar" then
-                    local r = innerH / 2 -- Bar radius
-                    local rh = r * user_opts.seekbarhandlesize -- Handle radius
+                    local r = innerH / 2
+                    local rh = r * user_opts.seekbarhandlesize
                     s_min = s_min + slider_lo.border + slider_lo.gap
                     s_max = s_max - slider_lo.border - slider_lo.gap
                     ass_draw_rr_h_cw(elem_ass, xp - rh, foH - rh, xp + rh, foH + rh, rh, slider_lo.stype == "diamond")
@@ -696,7 +809,6 @@ function render_elements(master_ass)
                     elem_ass:rect_cw(foH, foV, xp, elem_geo.h - foV - h)
 
                     if seekRanges and not user_opts.seekrangeseparate and slider_lo.rtype ~= "inverted" then
-                        -- Punch holes for the seekRanges to be drawn later
                         for _, range in pairs(seekRanges) do
                             if range["start"] < pos then
                                 local pstart = get_slider_ele_pos_for(element, range["start"])
@@ -825,14 +937,12 @@ function render_elements(master_ass)
 
             elem_ass:draw_stop()
 
-            -- add tooltip
             if not (element.slider.tooltipF == nil) then
                 if mouse_hit(element) then
                     local sliderpos = get_slider_value(element)
                     local tooltiplabel = element.slider.tooltipF(sliderpos)
 
                     local an = slider_lo.tooltip_an
-
                     local ty
 
                     if (an == 2) then
@@ -844,10 +954,8 @@ function render_elements(master_ass)
                     local tx = get_virt_mouse_pos()
                     if (slider_lo.adjust_tooltip) then
                         if (an == 2) then
-                            if (sliderpos < (s_min + 3)) then
-                                an = an - 1
-                            elseif (sliderpos > (s_max - 3)) then
-                                an = an + 1
+                            if (sliderpos < (s_min + 3)) then an = an - 1
+                            elseif (sliderpos > (s_max - 3)) then an = an + 1
                             end
                         elseif (sliderpos > (s_max - s_min) / 2) then
                             an = an + 1
@@ -858,7 +966,6 @@ function render_elements(master_ass)
                         end
                     end
 
-                    -- tooltip label
                     elem_ass:new_event()
                     elem_ass:pos(tx, ty)
                     elem_ass:an(an)
@@ -870,32 +977,38 @@ function render_elements(master_ass)
         elseif (element.type == "button") then
             local buttontext
             if type(element.content) == "function" then
-                buttontext = element.content() -- function objects
+                buttontext = element.content()
             elseif not (element.content == nil) then
-                buttontext = element.content -- text objects
+                buttontext = element.content
             end
 
-            buttontext = buttontext:gsub(":%((.?.?.?)%) unknown ", ":%(%1%)") --gsub("%) unknown %(\"", "")
-
-            local maxchars = element.layout.button.maxchars
-            -- 使用consolas字体时1个中文字符大约为1.5个英文字符
-            -- local charcount = buttontext:len()-  (buttontext:len()-select(2, buttontext:gsub('[^\128-\193]', '')))/1.5
-            local charcount = (buttontext:len() + select(2, buttontext:gsub("[^\128-\193]", "")) * 2) / 3
-            if not (maxchars == nil) and (charcount > maxchars) then
-                local limit = math.max(0, maxchars - 3)
-                if (charcount > limit) then
-                    while (charcount > limit) do
-                        buttontext = buttontext:gsub(".[\128-\191]*$", "")
-                        charcount = (buttontext:len() + select(2, buttontext:gsub("[^\128-\193]", "")) * 2) / 3
+            if buttontext then
+                buttontext = buttontext:gsub(":%((.?.?.?)%) unknown ", ":%(%1%)")
+                local maxchars = element.layout.button.maxchars
+                local charcount = (buttontext:len() + select(2, buttontext:gsub("[^\128-\193]", "")) * 2) / 3
+                if not (maxchars == nil) and (charcount > maxchars) then
+                    local limit = math.max(0, maxchars - 3)
+                    if (charcount > limit) then
+                        while (charcount > limit) do
+                            buttontext = buttontext:gsub(".[\128-\191]*$", "")
+                            charcount = (buttontext:len() + select(2, buttontext:gsub("[^\128-\193]", "")) * 2) / 3
+                        end
+                        buttontext = buttontext .. "..."
                     end
-                    buttontext = buttontext .. "..."
                 end
+                elem_ass:append(buttontext)
             end
-
-            elem_ass:append(buttontext)
         end
-
         master_ass:merge(elem_ass)
+    end
+
+    -- If a track menu is active, render it last so it appears on top of everything else.
+    if state.active_menu then
+        local menu_ass = render_track_menu()
+        master_ass:merge(menu_ass)
+    else
+        -- Ensure the clickable area is cleared when the menu is not active.
+        state.track_menu = {}
     end
 end
 
@@ -943,7 +1056,7 @@ function get_playlist()
         if title == nil then
             title = filename
         end
-        message = string.format("%s %s %s\n", message, (v.current and "●" or "○"), title)
+        message = string.format("%s %s %s\n", message, (v.current and "\238\132\129" or " "), title)
     end
     return message
 end
@@ -962,7 +1075,7 @@ function get_chapterlist()
         if title == nil then
             title = string.format("Chapter %02d", i)
         end
-        message = string.format("%s[%s] %s %s\n", message, time, (v.current and "●" or "○"), title)
+        message = string.format("%s[%s] %s %s\n", message, time, (v.current and "\238\132\129" or " "), title)
     end
     return message
 end
@@ -1020,6 +1133,7 @@ end
 
 function new_element(name, type)
     elements[name] = {}
+    elements[name].name = name
     elements[name].type = type
 
     -- add default stuff
@@ -1257,9 +1371,6 @@ layouts["default"] = function()
     end
     add_area("showhide", 0, sh_area_y0, osc_param.playresx, sh_area_y1)
 
-    -- fetch values
-    local osc_w, osc_h, osc_r, osc_p = osc_geo.w, osc_geo.h, osc_geo.r, osc_geo.p
-
     local lo
 
     --
@@ -1269,23 +1380,24 @@ layouts["default"] = function()
     new_element("bgbox", "box")
     lo = add_layout("bgbox")
 
-    lo.geometry = {x = posX, y = posY, an = 5, w = osc_w, h = osc_h}
+    lo.geometry = {x = posX, y = posY, an = 5, w = osc_geo.w, h = osc_geo.h}
     lo.layer = 10
     lo.style = osc_styles.bgBox
     lo.alpha[1] = user_opts.boxalpha
     lo.alpha[3] = user_opts.boxalpha
-    lo.box.radius = osc_r
+    lo.box.radius = osc_geo.r
 
     --
     -- Title row
     --
-    local refX = posX - pos_offsetX - osc_p
-    local refY = posY - pos_offsetY - osc_p
+    local refX = posX - pos_offsetX - osc_geo.p
+    local refY = posY - pos_offsetY - osc_geo.p
 
     --
     -- Seekbar
     --
     geo = {x = refX + osc_geo.w / 2, y = refY + 14, an = 5, w = osc_geo.w - 20, h = 9}
+
 
     new_element("bgbar1", "box")
     lo = add_layout("bgbar1")
@@ -1359,7 +1471,7 @@ layouts["default"] = function()
 
     -- Media title
     lo = add_layout("title")
-    lo.geometry = {x = refX + 310, y = refY + 47, an = 4, w = 370, h = 20}
+    lo.geometry = {x = refX + 310, y = refY + 47, an = 4, w = 340, h = 20}
     lo.style = osc_styles.s16Button
     lo.button.maxchars = user_opts.boxmaxchars
 
@@ -1466,25 +1578,14 @@ function osc_init()
 
     -- title
     ne = new_element("title", "button")
-
     ne.content = function()
         local title = mp.command_native({"expand-text", user_opts.title})
         -- escape ASS, and strip newlines and trailing slashes
         title = title:gsub("\\n", " "):gsub("\\$", ""):gsub("{", "\\{")
         return not (title == "") and title or "mpv"
     end
-
-    ne.eventresponder["mbtn_left_up"] = function()
-        local title = mp.get_property_osd("media-title")
-        if (have_pl) then
-            title = string.format("[%d/%d] %s", countone(pl_pos - 1), pl_count, title)
-        end
-        show_message(title)
-    end
-
-    ne.eventresponder["mbtn_right_up"] = function()
-        show_message(mp.get_property_osd("filename"))
-    end
+    -- Make title unclickable by assigning an empty event responder table
+    ne.eventresponder = {}
 
     -- playlist buttons
 
@@ -1603,8 +1704,8 @@ function osc_init()
 
     --cy_audio
     ne = new_element("cy_audio", "button")
-
-    ne.enabled = (#tracks_osc.audio > 0)
+    ne.visible = (#tracks_osc.audio > 1)
+    ne.enabled = (#tracks_osc.audio > 1)
     ne.content = function()
         local aid = "–"
         if not (get_track("audio") == 0) then
@@ -1612,19 +1713,26 @@ function osc_init()
         end
         return ("\238\132\134" .. osc_styles.cyDigit .. " " .. aid .. "∕" .. #tracks_osc.audio)
     end
-    ne.eventresponder["mbtn_left_up"] = function()
-        set_track("audio", 1)
+    local function toggle_audio_menu()
+        if not ne.enabled then return end
+        if state.active_menu == "audio" then
+            state.active_menu = nil
+        else
+            state.active_menu = "audio"
+            if not state.menu_hide_prevent_timer then
+                state.menu_hide_prevent_timer = mp.add_timeout(3, function() request_tick() end)
+            end
+            state.menu_hide_prevent_timer:kill()
+            state.menu_hide_prevent_timer:resume()
+        end
+        request_immediate_tick()
     end
-    ne.eventresponder["mbtn_right_up"] = function()
-        set_track("audio", -1)
-    end
-    ne.eventresponder["shift+mbtn_left_down"] = function()
-        show_message(get_tracklist("audio"), 2)
-    end
+    ne.eventresponder["mbtn_left_up"] = toggle_audio_menu
+    ne.eventresponder["mbtn_right_up"] = toggle_audio_menu
 
     --cy_sub
     ne = new_element("cy_sub", "button")
-
+    ne.visible = (#tracks_osc.sub > 0)
     ne.enabled = (#tracks_osc.sub > 0)
     ne.content = function()
         local sid = "–"
@@ -1633,15 +1741,22 @@ function osc_init()
         end
         return ("\238\132\135" .. osc_styles.cyDigit .. " " .. sid .. "∕" .. #tracks_osc.sub)
     end
-    ne.eventresponder["mbtn_left_up"] = function()
-        set_track("sub", 1)
+    local function toggle_sub_menu()
+        if not ne.enabled then return end
+        if state.active_menu == "sub" then
+            state.active_menu = nil
+        else
+            state.active_menu = "sub"
+            if not state.menu_hide_prevent_timer then
+                state.menu_hide_prevent_timer = mp.add_timeout(3, function() request_tick() end)
+            end
+            state.menu_hide_prevent_timer:kill()
+            state.menu_hide_prevent_timer:resume()
+        end
+        request_immediate_tick()
     end
-    ne.eventresponder["mbtn_right_up"] = function()
-        set_track("sub", -1)
-    end
-    ne.eventresponder["shift+mbtn_left_down"] = function()
-        show_message(get_tracklist("sub"), 2)
-    end
+    ne.eventresponder["mbtn_left_up"] = toggle_sub_menu
+    ne.eventresponder["mbtn_right_up"] = toggle_sub_menu
 
     --tog_fs
     ne = new_element("tog_fs", "button")
@@ -1917,6 +2032,7 @@ end
 
 function hide_osc()
     msg.trace("hide_osc")
+    state.active_menu = nil
     if not state.enabled then
         -- typically hide happens at render() from tick(), but now tick() is
         -- no-op and won't render again to remove the osc, so do that manually.
@@ -1969,6 +2085,17 @@ function request_tick()
     end
 end
 
+-- Request an immediate, non-rate-limited tick.
+function request_immediate_tick()
+    if state.tick_timer == nil then
+        state.tick_timer = mp.add_timeout(0, tick)
+    end
+    -- force immediate update
+    state.tick_timer:kill()
+    state.tick_timer.timeout = 0
+    state.tick_timer:resume()
+end
+
 function mouse_leave()
     if get_hidetimeout() >= 0 then
         hide_osc()
@@ -1986,10 +2113,7 @@ end
 -- Like request_init(), but also request an immediate update
 function request_init_resize()
     request_init()
-    -- ensure immediate update
-    state.tick_timer:kill()
-    state.tick_timer.timeout = 0
-    state.tick_timer:resume()
+    request_immediate_tick()
 end
 
 function render_wipe()
@@ -2005,8 +2129,7 @@ function render()
 
     -- check if display changed, if so request reinit
     if not (state.mp_screen_sizeX == current_screen_sizeX and state.mp_screen_sizeY == current_screen_sizeY) then
-        request_init_resize()
-
+        -- This is handled by the debounced osd-dimensions observer now
         state.mp_screen_sizeX = current_screen_sizeX
         state.mp_screen_sizeY = current_screen_sizeY
     end
@@ -2110,9 +2233,10 @@ function render()
 
     -- autohide
     if not (state.showtime == nil) and (get_hidetimeout() >= 0) then
+        local menu_hide_prevented = state.menu_hide_prevent_timer and state.menu_hide_prevent_timer:is_enabled()
         local timeout = state.showtime + (get_hidetimeout() / 1000) - now
         if timeout <= 0 then
-            if (state.active_element == nil) and not (mouse_over_osc) then
+            if (state.active_element == nil) and not (mouse_over_osc) and not state.active_menu and not menu_hide_prevented then
                 hide_osc()
             end
         else
@@ -2138,7 +2262,21 @@ function render()
     if state.osc_visible then
         render_elements(ass)
     end
-
+    if state.active_menu and state.track_menu.hitbox then
+        local h = state.track_menu.hitbox
+        set_virt_mouse_area(h.x1, h.y1, h.x2, h.y2, "track-menu")
+        if not state.track_menu_bindings_enabled then
+            mp.enable_key_bindings("track-menu")
+            state.track_menu_bindings_enabled = true
+        end
+    else
+        -- Set an empty area and disable when not active to prevent conflicts
+        set_virt_mouse_area(0, 0, 0, 0, "track-menu")
+        if state.track_menu_bindings_enabled then
+            mp.disable_key_bindings("track-menu")
+            state.track_menu_bindings_enabled = false
+        end
+    end
     -- submit
     set_osd(osc_param.playresy * osc_param.display_aspect, osc_param.playresy, ass.text)
 end
@@ -2152,6 +2290,39 @@ local function element_has_action(element, action)
 end
 
 function process_event(source, what)
+    if state.active_menu and what == "up" and source:find("mbtn") then
+        local anchor_name = (state.active_menu == 'audio' and 'cy_audio') or 'cy_sub'
+        local anchor_hit = false
+        for _, el in pairs(elements) do
+            if el.name == anchor_name and mouse_hit(el) then
+                anchor_hit = true
+                break
+            end
+        end
+
+        if not anchor_hit then
+            local item_hit = false
+            if state.track_menu and state.track_menu.items then
+                for _, item in ipairs(state.track_menu.items) do
+                    if mouse_hit_coords(item.x1, item.y1, item.x2, item.y2) then
+                        item_hit = true
+                        mp.commandv("set", state.active_menu, item.mpv_id)
+                        show_message(nicetypes[state.active_menu] .. ": " .. item.display_title)
+                        state.active_menu = nil
+                        request_tick()
+                        break
+                    end
+                end
+            end
+            if not item_hit then
+                state.active_menu = nil
+                request_tick()
+            else
+                return
+            end
+        end
+    end
+
     local action = string.format("%s%s", source, what and ("_" .. what) or "")
 
     if what == "down" or what == "press" then
@@ -2297,8 +2468,11 @@ validate_user_opts()
 
 mp.register_event("shutdown", shutdown)
 mp.register_event("start-file", request_init)
-mp.observe_property("track-list", nil, request_init)
-mp.observe_property("playlist", nil, request_init)
+-- FIX: A full re-initialization on track/playlist changes causes the OSC to
+-- flicker and menus to be drawn incorrectly for a frame. We only need to
+-- update the track lists and request a redraw.
+mp.observe_property("track-list", "native", function() update_tracklist(); request_tick() end)
+mp.observe_property("playlist", "native", request_tick)
 
 mp.register_script_message("osc-message", show_message)
 mp.register_script_message(
@@ -2372,15 +2546,21 @@ mp.observe_property(
         request_tick()
     end
 )
+
+-- Debounce resize events to prevent lag
+local resize_timer = mp.add_timeout(0, function() request_init_resize() end)
+resize_timer:kill()
+
 mp.observe_property(
     "osd-dimensions",
     "native",
     function(name, val)
-        -- (we could use the value instead of re-querying it all the time, but then
-        --  we might have to worry about property update ordering)
-        request_init_resize()
+        -- We get a flood of these on resize, so debounce them.
+        resize_timer.timeout = 0.1 -- 100ms
+        resize_timer:resume()
     end
 )
+
 
 -- mouse show/hide bindings
 mp.set_key_bindings(
@@ -2476,6 +2656,15 @@ mp.set_key_bindings(
     "force"
 )
 mp.enable_key_bindings("window-controls")
+mp.set_key_bindings(
+    {
+        { "mbtn_left", function(e) process_event("mbtn_left", "up") end },
+        { "mbtn_right", function(e) process_event("mbtn_right", "up") end }
+    },
+    "track-menu",
+    "force"
+)
+mp.disable_key_bindings("track-menu") -- Ensure it's off by default
 
 function get_hidetimeout()
     if user_opts.visibility == "always" then
