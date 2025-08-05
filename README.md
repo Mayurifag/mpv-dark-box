@@ -36,3 +36,8 @@ title=' '
 background=1.0
 geometry=640
 ```
+
+## Real world example
+
+The author of fork actually [uses this code in .dotfiles](https://github.com/Mayurifag/.dotfiles/tree/master/dot_config/mpv).
+I hope, it may be useful for someone as a reference.
