@@ -38,7 +38,9 @@ This is a fork of the original [maoiscat/mpv-dark-box](https://github.com/maoisc
 | Change                     | Description                                                                                                   |
 | :------------------------- | :------------------------------------------------------------------------------------------------------------ |
 | Get back volume button     | Was hidden by original author. You can scroll on it to change volume!                                         |
+| Audio and subtitle picker  | Audio picker hidden when there is only one audio track. Sub picker not shown if no subtitles.                 |
+| Stable OSC scale           | OSC uses video scaling by default, so it stays readable on large or HiDPI windows.                            |
 | mpv v0.37.0+ compatibility | Thanks to @Samillion in [this issue comment](https://github.com/0dist/oscc/issues/6#issuecomment-2387559031). |
-| README rewrite             | Translated to English and *opinionatedly* cleaned up.                                                         |
+| README/script rewrites     | Translated to English and *opinionatedly* cleaned up.                                                         |
 
 There is no active development here, things are working, yet any new vibecoded PRs are welcome!
